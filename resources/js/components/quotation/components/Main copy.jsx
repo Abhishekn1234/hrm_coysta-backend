@@ -1,0 +1,857 @@
+// src/App.jsx
+import React, { useState, useEffect, useCallback } from 'react';
+import './quotation.css'; // ← this file contains all of your CSS
+import 'bootstrap/dist/css/bootstrap.min.css';
+// Make sure FontAwesome is linked in public/index.html (or installed via npm)
+
+function Quotation() {
+  // ── 1) Static Inventory Data ───────────────────────────────────────────────────────────────────────────────────
+ const initialInventoryData = [
+  {
+    id: 1,
+    name: "Networking Equipment",
+    available: 15,
+    price: 1200,
+    vendor: "Vendor A",
+    days: 10,
+    subItems: [
+      {
+        id: 11,
+        name: "Wireless Access Points",
+        available: 8,
+        price: 450,
+        vendor: "Vendor B",
+        days: 7,
+        subItems: [
+          {
+            id: 111,
+            name: "Enterprise AP Pro",
+            available: 50,
+            price: 75,
+            vendor: "Vendor C",
+            days: 3,
+          },
+          {
+            id: 112,
+            name: "Mesh Wi-Fi System",
+            available: 30,
+            price: 120,
+            vendor: "Vendor C",
+            days: 4,
+          },
+        ],
+      },
+      {
+        id: 12,
+        name: "Switches",
+        available: 12,
+        price: 320,
+        vendor: "Vendor A",
+        days: 9,
+        subItems: [
+          {
+            id: 121,
+            name: "24-Port Gigabit Switch",
+            available: 15,
+            price: 220,
+            vendor: "Vendor A",
+            days: 5,
+          },
+          {
+            id: 122,
+            name: "48-Port Managed Switch",
+            available: 8,
+            price: 520,
+            vendor: "Vendor A",
+            days: 6,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: 2,
+    name: "Cabling Solutions",
+    available: 120,
+    price: 850,
+    vendor: "Vendor C",
+    days: 12,
+    subItems: [
+      {
+        id: 21,
+        name: "Ethernet Cables",
+        available: 500,
+        price: 3.5,
+        vendor: "Vendor C",
+        days: 8,
+        subItems: [
+          {
+            id: 211,
+            name: "Cat6 - 10ft",
+            available: 200,
+            price: 4.99,
+            vendor: "Vendor C",
+            days: 2,
+          },
+          {
+            id: 212,
+            name: "Cat6 - 25ft",
+            available: 150,
+            price: 8.99,
+            vendor: "Vendor C",
+            days: 3,
+          },
+        ],
+      },
+      {
+        id: 22,
+        name: "Fiber Optic Cables",
+        available: 85,
+        price: 12.5,
+        vendor: "Vendor B",
+        days: 11,
+      },
+    ],
+  },
+];
+
+  // ── 2) State Hooks ─────────────────────────────────────────────────────────────────────────────────────────────
+  const [inventoryData] = useState(initialInventoryData);
+  const [expandedRows, setExpandedRows] = useState(new Set());
+  const [searchTerm, setSearchTerm] = useState("");
+  const [vendorFilter, setVendorFilter] = useState("");
+  const [selectedItems, setSelectedItems] = useState([]);
+  const [includeSetup, setIncludeSetup] = useState(true);
+  const [expressShipping, setExpressShipping] = useState(false);
+
+  // ── 3) Toggle a single parent row (expand/collapse) ───────────────────────────────────────────────────────────
+  const toggleRow = useCallback((id) => {
+    setExpandedRows(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      return newSet;
+    });
+  }, []);
+
+  // ── 4) Expand All / Collapse All ──────────────────────────────────────────────────────────────────────────────
+  const expandAll = () => {
+    const collectParents = (items, parents = new Set()) => {
+      items.forEach(item => {
+        if (item.subItems && item.subItems.length) {
+          parents.add(item.id);
+          collectParents(item.subItems, parents);
+        }
+      });
+      return parents;
+    };
+    setExpandedRows(collectParents(inventoryData));
+  };
+
+  const collapseAll = () => {
+    setExpandedRows(new Set());
+  };
+
+  // ── 5) Search & Vendor Filter ─────────────────────────────────────────────────────────────────────────────────
+  const rowMatchesFilter = (item) => {
+    const searchTermLower = searchTerm.trim().toLowerCase();
+    const matchesName = searchTerm === "" || 
+      item.name.toLowerCase().includes(searchTermLower);
+    
+    const vendorLower = vendorFilter.toLowerCase();
+    const matchesVendor = vendorFilter === "" || 
+      item.vendor.toLowerCase() === vendorLower;
+    
+    // Check if any child matches (if there are children)
+    const childMatches = item.subItems && item.subItems.length > 0 
+      ? item.subItems.some(child => rowMatchesFilter(child))
+      : false;
+
+    return (matchesName && matchesVendor) || childMatches;
+  };
+
+  // ── 6) Render inventory rows recursively ────────────────────────────────────────────────────────────────────
+  const renderInventoryRows = (items, level = 0, parentId = null) => {
+    return items.flatMap(item => {
+      const hasChildren = Array.isArray(item.subItems) && item.subItems.length > 0;
+      const isExpanded = expandedRows.has(item.id);
+      const visibleBySearch = rowMatchesFilter(item);
+
+      // Only render if it passes search/vendor and if its parent is expanded (or it's a root)
+      const shouldRender =
+        visibleBySearch &&
+        (parentId === null || expandedRows.has(parentId));
+
+      let row = null;
+      if (shouldRender) {
+        row = (
+          <tr
+            key={item.id}
+            className={`level-${level} ${hasChildren ? "parent-item" : ""}`}
+            data-id={item.id}
+            data-name={item.name}
+            data-vendor={item.vendor}
+            data-available={item.available}
+            data-parent-id={parentId || ""}
+          >
+            <td>
+              <input
+                type="checkbox"
+                className="form-check-input item-checkbox"
+                onChange={(e) => handleItemCheckboxChange(e, item)}
+                checked={selectedItems.some(si => si.id === item.id)}
+              />
+            </td>
+            <td>
+              {hasChildren ? (
+                <span
+                  className={`toggle-symbol ${isExpanded ? "expanded" : "collapsed"}`}
+                  onClick={() => toggleRow(item.id)}
+                >
+                  {isExpanded ? "▼" : "▶"}
+                </span>
+              ) : (
+                <span style={{ display: "inline-block", width: "24px" }}></span>
+              )}{" "}
+              {item.name}
+            </td>
+            <td>{item.available}</td>
+            <td>
+              <input
+                type="number"
+                className="form-control qty-input"
+                min="1"
+                max={item.available}
+                value={
+                  (() => {
+                    const si = selectedItems.find(si => si.id === item.id);
+                    return si ? si.qty : 1;
+                  })()
+                }
+                onChange={(e) => handleQtyChangeInventory(item.id, e.target.value)}
+                style={{ maxWidth: "100px" }}
+              />
+            </td>
+            <td>{item.days}</td>
+            <td>{item.vendor}</td>
+            <td>${item.price.toFixed(2)}</td>
+          </tr>
+        );
+      }
+
+      // If expanded, render children as well
+      const childrenRows = [];
+      if (hasChildren && isExpanded) {
+        childrenRows.push(...renderInventoryRows(item.subItems, level + 1, item.id));
+      }
+
+      return shouldRender
+        ? [row, ...childrenRows].filter(Boolean)
+        : [];
+    });
+  };
+
+  // ── 7) Handle checkbox toggling for an inventory item ─────────────────────────────────────────────────────────
+  const handleItemCheckboxChange = (e, item) => {
+    const checked = e.target.checked;
+    setSelectedItems(prev => {
+      if (checked) {
+        if (prev.find(si => si.id === item.id)) return prev;
+        return [
+          ...prev,
+          {
+            id: item.id,
+            name: item.name,
+            qty: 1,
+            price: item.price,
+            days: item.days,
+            vendor: item.vendor,
+            available: item.available,
+          }
+        ];
+      } else {
+        return prev.filter(si => si.id !== item.id);
+      }
+    });
+  };
+
+  // ── 8) Handle quantity change from the inventory table ────────────────────────────────────────────────────────
+  const handleQtyChangeInventory = (itemId, value) => {
+    const newQty = Math.max(1, parseInt(value) || 1);
+    setSelectedItems(prev =>
+      prev.map(si => {
+        if (si.id === itemId) {
+          const qty = Math.min(newQty, si.available);
+          return { ...si, qty };
+        }
+        return si;
+      })
+    );
+  };
+
+  // ── 9) Handle quantity change in the Selected Items table ─────────────────────────────────────────────────────
+  const handleQtyChangeSelected = (itemId, value) => {
+    const newQty = Math.max(1, parseInt(value) || 1);
+    setSelectedItems(prev =>
+      prev.map(si => {
+        if (si.id === itemId) {
+          const qty = Math.min(newQty, si.available);
+          return { ...si, qty };
+        }
+        return si;
+      })
+    );
+  };
+
+  // ── 10) Remove a selected item ────────────────────────────────────────────────────────────────────────────────
+  const removeSelectedItem = (itemId) => {
+    setSelectedItems(prev => prev.filter(si => si.id !== itemId));
+  };
+
+  // ── 11) "Select All" Checkbox Handler ─────────────────────────────────────────────────────────────────────────
+  const handleSelectAll = (e) => {
+    const checked = e.target.checked;
+    if (checked) {
+      // collect all visible items
+      const allVisible = [];
+      const collectVisible = (items) => {
+        items.forEach(item => {
+          if (rowMatchesFilter(item)) {
+            allVisible.push(item);
+            if (item.subItems && item.subItems.length > 0 && expandedRows.has(item.id)) {
+              collectVisible(item.subItems);
+            }
+          }
+        });
+      };
+      collectVisible(inventoryData);
+      setSelectedItems(prev => {
+        const map = new Map();
+        prev.forEach(si => map.set(si.id, si));
+        allVisible.forEach(item => {
+          if (!map.has(item.id)) {
+            map.set(item.id, {
+              id: item.id,
+              name: item.name,
+              qty: 1,
+              days: item.days,
+              price: item.price,
+              vendor: item.vendor,
+              available: item.available,
+            });
+          }
+        });
+        return Array.from(map.values());
+      });
+    } else {
+      setSelectedItems([]);
+    }
+  };
+
+  // ── 12) Summary Calculations ───────────────────────────────────────────────────────────────────────────────────
+  const [subtotal, setSubtotal] = useState(0);
+  const [discount, setDiscount] = useState(0);
+  const [tax, setTax] = useState(0);
+  const [totalAmount, setTotalAmount] = useState(0);
+
+  const recalcSummary = useCallback(() => {
+    let base = selectedItems.reduce((sum, si) => sum + si.qty * si.price, 0);
+    const disc = base * 0.05;
+    const taxed = (base - disc) * 0.08;
+    let shipping = 75 + (expressShipping ? 50 : 0);
+    if (includeSetup) base += 150;
+    const total = base - disc + taxed + shipping;
+
+    setSubtotal(base);
+    setDiscount(disc);
+    setTax(taxed);
+    setTotalAmount(total);
+  }, [selectedItems, includeSetup, expressShipping]);
+
+  useEffect(() => {
+    recalcSummary();
+  }, [selectedItems, includeSetup, expressShipping, recalcSummary]);
+
+  // ── 13) Selected Count ─────────────────────────────────────────────────────────────────────────────────────────
+  const selectedCount = selectedItems.length;
+
+  // ── 14) Render ─────────────────────────────────────────────────────────────────────────────────────────────────
+  return (
+    <div className="dashboard-container">
+      {/* ── Sidebar if needed ── */}
+
+      <div className="main-content">
+        {/* ── Header ──────────────────────────────────────────────────────────────────────────────────────────────── */}
+        <div className="header fade-in">
+          <h1>
+            <i className="fas fa-file-invoice"></i> Create New Quotation
+          </h1>
+          <div className="user-menu">
+            <div className="user-info">
+              <div className="name">Alex Morgan</div>
+              <div className="role">Sales Manager</div>
+            </div>
+            <div className="avatar">AM</div>
+          </div>
+        </div>
+
+        {/* ── Stats Summary ───────────────────────────────────────────────────────────────────────────────────────── */}
+        <div className="stats-summary">
+        <div className="row fade-in delay-1 mt-4">
+          <div className="col-md-3">
+            <div className="dashboard-card">
+              <div className="card-body">
+                <div className="d-flex align-items-center">
+                  <div className="bg-primary-subtle p-3 rounded me-3">
+                    <i className="fas fa-file-invoice fs-2 text-primary"></i>
+                  </div>
+                  <div>
+                    <h5 className="mb-1">Quotations</h5>
+                    <h3 className="mb-0">24</h3>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-md-3">
+            <div className="dashboard-card">
+              <div className="card-body">
+                <div className="d-flex align-items-center">
+                  <div className="bg-success-subtle p-3 rounded me-3">
+                    <i className="fas fa-check-circle fs-2 text-success"></i>
+                  </div>
+                  <div>
+                    <h5 className="mb-1">Approved</h5>
+                    <h3 className="mb-0">18</h3>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-md-3">
+            <div className="dashboard-card">
+              <div className="card-body">
+                <div className="d-flex align-items-center">
+                  <div className="bg-warning-subtle p-3 rounded me-3">
+                    <i className="fas fa-clock fs-2 text-warning"></i>
+                  </div>
+                  <div>
+                    <h5 className="mb-1">Pending</h5>
+                    <h3 className="mb-0">5</h3>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-md-3">
+            <div className="dashboard-card">
+              <div className="card-body">
+                <div className="d-flex align-items-center">
+                  <div className="bg-danger-subtle p-3 rounded me-3">
+                    <i className="fas fa-times-circle fs-2 text-danger"></i>
+                  </div>
+                  <div>
+                    <h5 className="mb-1">Rejected</h5>
+                    <h3 className="mb-0">1</h3>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+
+        {/* ── Quotation Form ───────────────────────────────────────────────────────────────────────────────────────── */}
+       <div className="dashboard-card quotation-form-card fade-in delay-2 mt-4">
+        {/* <div className="dashboard-card fade-in delay-2 mt-4"> ---fixed the border gap problem by adding new class upthere and commenting this one and made new css of that new class if any error occur just undo these things of jsx*/}
+          <div className="card-header">
+            <h3>
+              <i className="fas fa-info-circle"></i> Quotation Details
+            </h3>
+          </div>
+          <div className="card-body">
+            <div className="row g-4">
+              <div className="col-md-4">
+                <label className="form-label mandatory">Estimate Type</label>
+                <select className="form-select" required>
+                  <option value="">Select Type</option>
+                  <option>Project</option>
+                  <option>Service</option>
+                  <option>Product</option>
+                </select>
+              </div>
+
+              <div className="col-md-4">
+                <label className="form-label mandatory">Customer Type</label>
+                <select className="form-select" required>
+                  <option value="">Select Type</option>
+                  <option>New</option>
+                  <option>Existing</option>
+                  <option>Corporate</option>
+                </select>
+              </div>
+
+              <div className="col-md-4">
+                <label className="form-label mandatory">Customer</label>
+                <div className="input-group">
+                  <input
+                    type="text"
+                    className="form-control"
+                    defaultValue="Tech Solutions Inc."
+                    required
+                  />
+                  <button className="btn btn-outline">
+                    <i className="fas fa-users"></i>
+                  </button>
+                </div>
+              </div>
+
+              <div className="col-md-6">
+                <label className="form-label">Contact Person</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  defaultValue="Sarah Johnson"
+                />
+              </div>
+
+              <div className="col-md-6">
+                <label className="form-label mandatory">Project Name</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  defaultValue="Office Network Setup"
+                  required
+                />
+              </div>
+
+              <div className="col-md-4">
+                <label className="form-label">Phone No</label>
+                <input
+                  type="tel"
+                  className="form-control"
+                  defaultValue="555-0123"
+                />
+              </div>
+
+              <div className="col-md-4">
+                <label className="form-label">Client Mail</label>
+                <input
+                  type="email"
+                  className="form-control"
+                  defaultValue="s.johnson@techsolutions.com"
+                />
+              </div>
+
+              <div className="col-md-4">
+                <label className="form-label mandatory">Date</label>
+                <input
+                  type="date"
+                  className="form-control"
+                  defaultValue="2025-05-24"
+                  required
+                />
+              </div>
+
+              <div className="col-md-3">
+                <label className="form-label mandatory">Estimate No</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  defaultValue="EST-1955"
+                  readOnly
+                />
+              </div>
+
+              <div className="col-md-3">
+                <label className="form-label">Location</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  defaultValue="New York"
+                />
+              </div>
+
+              <div className="col-md-3">
+                <label className="form-label">Venue</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  defaultValue="Main Office"
+                />
+              </div>
+
+              <div className="col-md-3">
+                <label className="form-label">Sales Person</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  defaultValue="Alex Morgan"
+                  readOnly
+                />
+              </div>
+
+             <div className="col-md-3">
+                 <label className="form-label">Status</label>
+                <select className="form-select py-2">
+                 <option value="pending">Pending</option>
+                 <option value="completed">Completed</option>
+              </select>
+            </div>
+
+              <div className="col-md-3">
+                <label className="form-label">Start Date</label>
+                <input
+                  type="date"
+                  className="form-control"
+                  defaultValue="2025-06-01"
+                />
+              </div>
+
+              <div className="col-md-3">
+                <label className="form-label">End Date</label>
+                <input
+                  type="date"
+                  className="form-control"
+                  defaultValue="2025-06-15"
+                />
+              </div>
+            </div>
+          </div>
+        {/* </div> --- commented div and made new div and class old one was causing gap problem*/}
+    </div>
+        {/* ── Inventory Selection ────────────────────────────────────────────────────────────────────────────────────── */}
+        <div className="dashboard-card fade-in delay-2 mt-4">
+          <div className="card-header d-flex justify-content-between align-items-center">
+            <h3>
+              <i className="fas fa-boxes"></i> Select Inventory Items
+            </h3>
+            <div className="d-flex gap-2">
+              <button className="btn btn-sm btn-outline" onClick={expandAll}>
+                <i className="fas fa-expand"></i> Expand All
+              </button>
+              <button className="btn btn-sm btn-outline" onClick={collapseAll}>
+                <i className="fas fa-compress"></i> Collapse All
+              </button>
+            </div>
+          </div>
+          <div className="card-body">
+            <div className="search-container mb-3 d-flex align-items-center gap-2">
+              <div className="search-box d-flex align-items-center">
+                <i className="fas fa-search me-2"></i>
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder="Search inventory items..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  id="searchInventory"
+                />
+              </div>
+              <select
+                className="form-select"
+                style={{ maxWidth: "200px" }}
+                value={vendorFilter}
+                onChange={(e) => setVendorFilter(e.target.value)}
+                id="vendorFilter"
+              >
+                <option value="">All Vendors</option>
+                <option>Vendor A</option>
+                <option>Vendor B</option>
+                <option>Vendor C</option>
+              </select>
+              <div className="form-check ms-auto">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="selectAll"
+                  onChange={handleSelectAll}
+                  checked={
+                    (() => {
+                      const allIds = [];
+                      const collectIds = (items) => {
+                        items.forEach(item => {
+                          if (rowMatchesFilter(item)) {
+                            allIds.push(item.id);
+                            if (item.subItems && item.subItems.length > 0 && expandedRows.has(item.id)) {
+                              collectIds(item.subItems);
+                            }
+                          }
+                        });
+                      };
+                      collectIds(inventoryData);
+                      if (allIds.length === 0) return false;
+                      return allIds.every(id => selectedItems.some(si => si.id === id));
+                    })()
+                  }
+                />
+                <label className="form-check-label" htmlFor="selectAll">
+                  Select All
+                </label>
+              </div>
+            </div>
+
+            <div className="table-responsive">
+              <table className="table tree-table table-hover">
+                <thead className="table-light">
+                  <tr>
+                    <th style={{ width: "40px" }}></th>
+                    <th>Inventory Item</th>
+                    <th>Available</th>
+                    <th>Quantity</th>
+                    <th>Days</th>
+                    <th>Vendor</th>
+                    <th>Unit Price</th>
+                  </tr>
+                </thead>
+                <tbody id="inventoryBody">
+                  {renderInventoryRows(inventoryData)}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Selected Items & Summary ──────────────────────────────────────────────────────────────────────────────── */}
+        <div className="row fade-in delay-3 mt-4">
+          {/* ── Selected Items Table ────────────────────────────────────────────────────────────────────────────── */}
+          <div className="col-lg-8">
+            <div className="dashboard-card h-100">
+              <div className="card-header d-flex justify-content-between align-items-center">
+                <h3>
+                  <i className="fas fa-list-check"></i> Selected Inventory Items
+                </h3>
+                <span className="badge bg-primary py-2 px-3" id="selectedCount">
+                  {selectedCount} item{selectedCount !== 1 ? "s" : ""} selected
+                </span>
+              </div>
+              <div className="card-body">
+                <div className="table-responsive">
+                  <table className="table selected-items-table">
+                    <thead>
+                      <tr>
+                        <th>Item Name</th>
+                        <th>Quantity</th>
+                        <th>Unit Price</th>
+                        <th>Total</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="selectedItems">
+                      {selectedItems.map(si => {
+                        const total = (si.qty * si.price).toFixed(2);
+                        return (
+                          <tr key={si.id} data-id={si.id}>
+                            <td>{si.name}</td>
+                            <td>
+                              <input
+                                type="number"
+                                className="form-control qty-update"
+                                min="1"
+                                max={si.available}
+                                value={si.qty}
+                                onChange={(e) => handleQtyChangeSelected(si.id, e.target.value)}
+                                style={{ maxWidth: "80px" }}
+                              />
+                            </td>
+                            <td>${si.price.toFixed(2)}</td>
+                            <td>${total}</td>
+                            <td>
+                              <button
+                                className="btn btn-sm btn-danger remove-item"
+                                onClick={() => removeSelectedItem(si.id)}
+                              >
+                                <i className="fas fa-trash"></i>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan="3" className="text-end fw-bold">
+                          Subtotal
+                        </td>
+                        <td id="subtotal">${subtotal.toFixed(2)}</td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Quotation Summary Card ───────────────────────────────────────────────────────────────────────────── */}
+          <div className="col-lg-4">
+            <div className="summary-card h-100">
+              <h3 className="mb-4">
+                <i className="fas fa-receipt me-2"></i> Quotation Summary
+              </h3>
+              <div className="summary-item d-flex justify-content-between">
+                <span>Subtotal:</span>
+                <span id="summarySubtotal">${subtotal.toFixed(2)}</span>
+              </div>
+              <div className="summary-item d-flex justify-content-between">
+                <span>Discount (5%):</span>
+                <span id="discount">${discount.toFixed(2)}</span>
+              </div>
+              <div className="summary-item d-flex justify-content-between">
+                <span>Tax (8%):</span>
+                <span id="tax">${tax.toFixed(2)}</span>
+              </div>
+              <div className="summary-item d-flex justify-content-between">
+                <span>Shipping:</span>
+                <span>${expressShipping ? 125 : 75}.00</span>
+              </div>
+              <div className="summary-item d-flex justify-content-between">
+                <span>Total:</span>
+                <span id="totalAmount">${totalAmount.toFixed(2)}</span>
+              </div>
+
+              <div className="mt-4">
+                <div className="form-check form-switch mb-3">
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    id="includeSetup"
+                    checked={includeSetup}
+                    onChange={(e) => setIncludeSetup(e.target.checked)}
+                  />
+                  <label className="form-check-label" htmlFor="includeSetup">
+                    Include setup fee ($150)
+                  </label>
+                </div>
+
+                <div className="form-check form-switch">
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    id="expressShipping"
+                    checked={expressShipping}
+                    onChange={(e) => setExpressShipping(e.target.checked)}
+                  />
+                  <label className="form-check-label" htmlFor="expressShipping">
+                    Express shipping (+$50)
+                  </label>
+                </div>
+              </div>
+
+              <div className="d-grid mt-4">
+                <button className="btn btn-light btn-lg fw-bold">
+                  <i className="fas fa-file-pdf me-2"></i> Generate Quotation
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default Quotation;
+
+
+
