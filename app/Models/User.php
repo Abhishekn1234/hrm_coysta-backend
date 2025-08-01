@@ -97,6 +97,10 @@ public function tasks()
 {
     return $this->hasMany(Task::class, 'user_id');
 }
+ public function logs()
+{
+    return $this->hasMany(TaskLog::class, 'user_id');
+}
 
 
     /**

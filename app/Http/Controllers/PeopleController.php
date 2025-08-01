@@ -571,10 +571,13 @@ public function resume(Request $request, $taskId, $userId)
     $task->project_status = 'In Progress';
     $task->save();
 
+    $resumedAt = now();
+
     $log = new TaskLog();
     $log->task_id = $taskId;
     $log->user_id = $userId;
-    $log->resumed_at = now();
+    $log->resumed_at = $resumedAt;
+    $log->log_date = $resumedAt->toDateString(); // ✅ Set log_date from resumed_at
     $log->save();
 
     return response()->json(['message' => 'Task resumed']);
@@ -595,32 +598,25 @@ public function pause(Request $request, $taskId, $userId)
 
     if ($log) {
         $log->paused_at = now();
+        $log->log_date = now()->toDateString(); // ✅ Save current date
 
         if ($log->resumed_at && $log->paused_at) {
             $resumed = Carbon::parse($log->resumed_at);
             $paused = Carbon::parse($log->paused_at);
             $interval = $resumed->diff($paused);
 
-            // Formatted time: "X hrs Y minutes Z seconds"
             $formatted = '';
-            if ($interval->h > 0) {
-                $formatted .= $interval->h . ' hrs ';
-            }
-            if ($interval->i > 0 || $interval->h === 0) {
-                $formatted .= $interval->i . ' minutes ';
-            }
-            if ($interval->s > 0 || ($interval->h === 0 && $interval->i === 0)) {
-                $formatted .= $interval->s . ' seconds';
-            }
+            if ($interval->h > 0) $formatted .= $interval->h . ' hrs ';
+            if ($interval->i > 0 || $interval->h === 0) $formatted .= $interval->i . ' minutes ';
+            if ($interval->s > 0 || ($interval->h === 0 && $interval->i === 0)) $formatted .= $interval->s . ' seconds';
 
-            $formatted = trim($formatted);
-            $log->duration = $formatted;
+            $log->duration = trim($formatted);
             $log->save();
 
             TaskTracking::create([
                 'task_id'    => $taskId,
                 'user_id'    => $userId,
-                'time_taken' => $formatted,
+                'time_taken' => $log->duration,
                 'date'       => now()->toDateString(),
                 'time'       => now()->toTimeString(),
             ]);
@@ -637,53 +633,74 @@ public function pause(Request $request, $taskId, $userId)
 
 public function end(Request $request, $taskId, $userId)
 {
+    // Fetch the task
     $task = Task::findOrFail($taskId);
 
+    // Find the latest active log for this user & task
     $log = $task->logs()
                 ->where('user_id', $userId)
-                ->whereNull('paused_at')
+                ->whereNull('ended_at') // Still active
                 ->latest()
                 ->first();
 
-    if ($log) {
-        $log->paused_at = now();
-
-        $resumed = Carbon::parse($log->resumed_at);
-        $paused = Carbon::parse($log->paused_at);
-        $interval = $resumed->diff($paused);
-
-        $formatted = '';
-        if ($interval->h > 0) {
-            $formatted .= $interval->h . ' hrs ';
-        }
-        if ($interval->i > 0 || $interval->h === 0) {
-            $formatted .= $interval->i . ' minutes ';
-        }
-        if ($interval->s > 0 || ($interval->h === 0 && $interval->i === 0)) {
-            $formatted .= $interval->s . ' seconds';
-        }
-
-        $formatted = trim($formatted);
-        $log->duration = $formatted;
-        $log->save();
-
-        // You can optionally convert total hours as decimal for `task->duration` sum
-        $task->duration += round(($interval->h * 60 + $interval->i + $interval->s / 60) / 60, 2);
-
-        TaskTracking::create([
-            'task_id'    => $taskId,
-            'user_id'    => $userId,
-            'time_taken' => $formatted,
-            'date'       => now()->toDateString(),
-            'time'       => now()->toTimeString(),
-        ]);
+    if (!$log) {
+        \Log::error("Task log not found for user $userId and task $taskId");
+        return response()->json(['message' => 'Task log not found'], 404);
     }
+
+    $now = Carbon::now();
+
+    $log->paused_at = $now;
+    $log->ended_at = $now;
+    $log->log_date = $now->toDateString();
+
+    $resumed = Carbon::parse($log->resumed_at);
+    $interval = $resumed->diff($now);
+
+    // Format readable duration string
+    $formatted = '';
+    if ($interval->d > 0) $formatted .= ($interval->d * 24) . ' hrs ';
+    if ($interval->h > 0) $formatted .= $interval->h . ' hrs ';
+    if ($interval->i > 0) $formatted .= $interval->i . ' minutes ';
+    if ($interval->s > 0) $formatted .= $interval->s . ' seconds';
+    $log->duration = trim($formatted);
+
+    try {
+        $log->save();
+    } catch (\Exception $e) {
+        \Log::error("Error saving log", ['message' => $e->getMessage()]);
+        return response()->json(['message' => 'Failed to save log'], 500);
+    }
+
+    // Convert total time to hours as float
+    $totalMinutes = ($interval->d * 24 * 60) + ($interval->h * 60) + $interval->i + ($interval->s / 60);
+    $additionalHours = round($totalMinutes / 60, 2);
+
+    // Ensure task->duration is numeric
+    $existingDuration = is_numeric($log->duration) ? $log->duration : 0;
+    $log->duration = $existingDuration + $additionalHours;
 
     $task->project_status = 'Completed';
     $task->save();
 
-    return response()->json(['message' => 'Task ended', 'total_duration' => $task->duration]);
+    // Log task tracking
+    TaskTracking::create([
+        'task_id'    => $taskId,
+        'user_id'    => $userId,
+        'time_taken' => $log->duration,
+        'date'       => $now->toDateString(),
+        'time'       => $now->format('h:i A'),
+    ]);
+
+    return response()->json([
+        'message' => 'Task ended successfully',
+        'duration_logged' => $log->duration,
+        'total_task_duration_in_hours' => $task->duration
+    ]);
 }
+
+
+
 
 
 public function deleteTask($id)
@@ -826,39 +843,40 @@ public function rejectBacklog($id)
 public function Salary(Request $request)
 {
     $monthName = $request->query('month'); // e.g., "July"
-    $year = date('Y'); // You can also make year dynamic if needed
+    $year = date('Y'); // Optional: make dynamic if needed
 
-    // Default to current month if none provided
     if (!$monthName) {
-        $monthName = date('F');
+        $monthName = date('F'); // Default to current month
     }
 
-    // Convert month name to number
     $monthNum = date('m', strtotime($monthName));
     $startOfMonth = Carbon::createFromDate($year, $monthNum, 1)->startOfMonth();
     $endOfMonth = $startOfMonth->copy()->endOfMonth();
 
-    // Get all dates in the month except Sundays
+    // All working dates excluding Sundays
     $allWorkingDates = collect(CarbonPeriod::create($startOfMonth, $endOfMonth))
-        ->filter(function ($date) {
-            return $date->dayOfWeek !== Carbon::SUNDAY;
-        });
+        ->filter(fn($date) => $date->dayOfWeek !== Carbon::SUNDAY);
 
-    // Total working days (excluding Sundays)
-    $totalWorkingDays = $allWorkingDates->count();
+    $users = User::with([
+        'leaveRequests' => function ($query) use ($startOfMonth, $endOfMonth) {
+            $query->where(function ($q) use ($startOfMonth, $endOfMonth) {
+                $q->whereBetween('from_date', [$startOfMonth, $endOfMonth])
+                  ->orWhereBetween('to_date', [$startOfMonth, $endOfMonth])
+                  ->orWhere(function ($q2) use ($startOfMonth, $endOfMonth) {
+                      $q2->where('from_date', '<=', $startOfMonth)
+                         ->where('to_date', '>=', $endOfMonth);
+                  });
+            });
+        },
+        'logs' => function ($query) use ($startOfMonth, $endOfMonth) {
+            $query->whereBetween('created_at', [
+                $startOfMonth->copy()->startOfDay(),
+                $endOfMonth->copy()->endOfDay()
+            ]);
+        }
+    ])->get();
 
-    $users = User::with(['leaveRequests' => function ($query) use ($startOfMonth, $endOfMonth) {
-        $query->where(function ($q) use ($startOfMonth, $endOfMonth) {
-            $q->whereBetween('from_date', [$startOfMonth, $endOfMonth])
-              ->orWhereBetween('to_date', [$startOfMonth, $endOfMonth])
-              ->orWhere(function ($q2) use ($startOfMonth, $endOfMonth) {
-                  $q2->where('from_date', '<=', $startOfMonth)
-                     ->where('to_date', '>=', $endOfMonth);
-              });
-        });
-    }])->get();
-
-    $results = $users->map(function ($user) use ($allWorkingDates) {
+    $results = $users->map(function ($user) use ($allWorkingDates, $startOfMonth, $monthName) {
         $leaveDates = collect();
 
         foreach ($user->leaveRequests as $leave) {
@@ -866,7 +884,6 @@ public function Salary(Request $request)
             $to = Carbon::parse($leave->to_date);
             $period = CarbonPeriod::create($from, $to);
 
-            // Add only working days (exclude Sundays) within leave period
             foreach ($period as $date) {
                 if ($date->dayOfWeek !== Carbon::SUNDAY && $allWorkingDates->contains($date)) {
                     $leaveDates->push($date->toDateString());
@@ -880,19 +897,69 @@ public function Salary(Request $request)
         $dailyHours = 8;
         $monthlyHours = $attendedDays * $dailyHours;
 
+        $fullDays = 0;
+        $halfDays = 0;
+        $uncountableDays = 0;
+
+        // Group logs by day
+        $logsByDate = $user->logs->groupBy(function ($log) {
+            return Carbon::parse($log->created_at)->format('Y-m-d');
+        });
+
+        foreach ($logsByDate as $date => $logs) {
+            $totalSeconds = 0;
+
+            foreach ($logs as $log) {
+                if ($log->duration) {
+                    $pattern = '/(?:(\d+)\s*hrs?)?\s*(?:(\d+)\s*minutes?)?\s*(?:(\d+)\s*seconds?)?/i';
+                    if (preg_match($pattern, $log->duration, $matches)) {
+                        $hours = isset($matches[1]) ? (int) $matches[1] : 0;
+                        $minutes = isset($matches[2]) ? (int) $matches[2] : 0;
+                        $seconds = isset($matches[3]) ? (int) $matches[3] : 0;
+                        $totalSeconds += ($hours * 3600) + ($minutes * 60) + $seconds;
+                    }
+                }
+            }
+
+            $totalHours = $totalSeconds / 3600;
+
+            if ($totalHours >= 10) {
+                $uncountableDays++;
+            } elseif ($totalHours >= 8) {
+                $fullDays++;
+            } elseif ($totalHours > 0) {
+                $halfDays++;
+            }
+        }
+
         return [
             'id' => $user->id,
             'name' => $user->name,
-            'created_at'=>$user->created_at,
+            'created_at' => $user->created_at,
+            'month' => $monthName, // Explicitly added month for frontend filtering
             'leaveDays' => $uniqueLeaveDays,
             'attendedDays' => $attendedDays,
             'monthlyHours' => $monthlyHours,
             'dailyHours' => $dailyHours,
+            'fullDays' => $fullDays,
+            'halfDays' => $halfDays,
+            'uncountableDays' => $uncountableDays,
+            'logs' => $user->logs->map(function ($log) {
+                return [
+                    'task_id' => $log->task_id,
+                    'resumed_at' => $log->resumed_at,
+                    'paused_at' => $log->paused_at,
+                    'duration' => $log->duration,
+                    'log_date' => $log->log_date,
+                    'status' => $log->status,
+                ];
+            }),
         ];
     });
 
     return response()->json($results);
 }
+
 public function Punching(Request $request)
 {
     $query = \App\Models\Attendance::with('user');
@@ -930,6 +997,47 @@ public function Punching(Request $request)
     return response()->json($data);
 }
 
+public function TaskReport(Request $request)
+{
+    $search = $request->query('search');
+    $date = $request->query('date');
+
+    $query = DB::table('task_logs')
+        ->join('task', 'task_logs.task_id', '=', 'task.id')
+        ->join('users', 'task_logs.user_id', '=', 'users.id')
+        ->leftJoin('task_trackings', function($join) {
+            $join->on('task_logs.task_id', '=', 'task_trackings.task_id')
+                 ->on('task_logs.user_id', '=', 'task_trackings.user_id')
+                 ->on(DB::raw('DATE(task_logs.log_date)'), '=', 'task_trackings.date');
+        })
+        ->select(
+            'users.id as user_id',
+            DB::raw("CONCAT(users.first_name, ' ', users.last_name) as username"),
+            'task.task_name as task',
+            'task_logs.resumed_at',
+            'task_logs.paused_at',
+            'task_logs.duration',
+            'task_logs.status',
+            'task_logs.log_date',
+            'task.project_status',
+            'task_trackings.time_taken',
+            'task_logs.ended_at'
+        );
+
+    if ($search) {
+        $query->where(function($q) use ($search) {
+            $q->where('users.first_name', 'like', "%$search%")
+              ->orWhere('users.last_name', 'like', "%$search%")
+              ->orWhere('task.task_name', 'like', "%$search%");
+        });
+    }
+
+    if ($date) {
+        $query->whereDate('task_logs.log_date', $date);
+    }
+
+    return $query->orderBy('task_logs.log_date', 'desc')->paginate(10);
+}
 
 protected function storeFile(Request $request, $field)
 {

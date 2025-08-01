@@ -63,28 +63,21 @@ class TaskLog extends Model
     protected $table = 'task_logs';
 
      protected $fillable = [
-        'task_id',
-        'user_id',
-        'resumed_at',
-        'paused_at',
-        'ended_at',
-        'duration'
-    ];
+    'task_id',
+    'user_id',
+    'resumed_at',
+    'paused_at',
+    'ended_at',
+    'duration',
+    'log_date'  // <-- added
+];
 
-    protected $casts = [
-        'resumed_at' => 'datetime',
-        'paused_at' => 'datetime',
-        'ended_at' => 'datetime',
-    ];
-    public function task(): BelongsTo
-    {
-        return $this->belongsTo(Task::class);
-    }
-
-    public function user(): BelongsTo
-    {
-        return $this->belongsTo(User::class);
-    }
+protected $casts = [
+    'resumed_at' => 'datetime',
+    'paused_at' => 'datetime',
+    'ended_at' => 'datetime',
+    'log_date' => 'date', // <-- optional, but recommended
+];
 }
 class TaskTracking extends Model
 {

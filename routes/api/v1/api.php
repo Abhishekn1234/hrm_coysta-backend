@@ -37,6 +37,7 @@ use App\Http\Controllers\VendorController;
 |
  */
 Route::get('/v1/punching-report', [PeopleController::class, 'Punching']);
+Route::get('v1/task-report', [PeopleController::class, 'TaskReport']);
 
 Route::get('/v1/salaries', [PeopleController::class, 'Salary']);
   Route::get('/v1/projects', [ProjectController::class, 'index']); // All projects
